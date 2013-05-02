@@ -1,0 +1,53 @@
+# http://stackoverflow.com/questions/13371925/how-to-turn-off-or-specify-the-nginx-error-log-location
+error_log /dev/null crit;
+
+worker_processes 1;
+pid %NGX_PID%;
+
+events {
+    worker_connections 1024;
+}
+ 
+http {
+    sendfile on;
+    tcp_nopush on;
+    tcp_nodelay off;
+    default_type application/octet-stream;
+    
+    client_body_temp_path %SPOOL_DIR%/client_temp 1 2;
+    proxy_temp_path %SPOOL_DIR%/proxy_temp 1 2;
+    fastcgi_temp_path %SPOOL_DIR%/fstcgi_temp 1 2; 
+    uwsgi_temp_path %SPOOL_DIR%/uwsgi_temp 1 2; 
+    scgi_temp_path %SPOOL_DIR%/scgi_temp 1 2; 
+    
+    log_format main '$remote_addr - $remote_user [$time_local] '
+                  '"$request" $status  $body_bytes_sent "$http_referer" '
+                  '"$http_user_agent" "$http_x_forwarded_for"';
+                  
+    access_log %NGX_LOG%/%NGX_NAME%.access.log;
+    error_log %NGX_LOG%/%NGX_NAME%.error.log;
+	
+    upstream backend  {
+        server unix://%RUN_DIR%/%APP%.sock;
+    }
+    
+    server {
+        listen %PORT%;
+        server_name 127.0.0.1;
+        charset utf-8;
+        client_max_body_size 75M;
+    
+        location /media  {
+                    alias %PROJECT%/media;
+        }
+        
+        location /static {
+                alias %PROJECT%/static;
+        }
+    
+        location /  {
+            include uwsgi_params;
+            uwsgi_pass backend;
+        }
+    }
+}

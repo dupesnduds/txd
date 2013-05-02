@@ -1,0 +1,473 @@
+#!/usr/bin/env bash
+# Sun Apr 28 20:07:59 PST 2013
+# Copyright 1996 - 2013, Tumunu
+# Released under the terms of the GNU General Public License
+set -e
+
+DESC="TXD2 Django Setup"
+VIRTUALENV="virtualenv-1.9.1"
+
+do_set()
+{
+    # TODO:
+    # messy, messy hack
+    while IFS='=' read lhs rhs; do
+        if [[ $line != *( )#* ]]; then
+        declare $lhs=$rhs
+        fi
+    done < txd.conf
+    
+    if [ $subdomain ]; then
+        BASE_PATH=/users/home/$txduser/domains/$subdomain
+    else
+        BASE_PATH=/users/home/$txduser
+    fi
+    
+    # django
+    PROJECT=$BASE_PATH/$djangopath/$djangoapp
+    
+    TXD_USER=$txduser
+    SUB_DOMAIN=$subdomain
+    DJANGO_APP=$djangoapp
+    DJANGO_PATH=$djangopath
+    PORT=$txdport
+}
+
+do_breaker()
+{
+    echo -e "\n****************************************************************************"
+}
+
+# Why not? Right?
+do_splash()
+{
+    clear; echo -e "\n\no-O-o"                         
+    echo -e "  o   o  o o-O-o o  o o-o  o  o"
+    echo -e "  o   o  o o o o o  o o  o o  o"
+    echo -e "  o   o--o o o o o--o o  o o--o\n"
+    echo -e "         (www.tumunu.com)\n"
+    echo -e " TXD2 nginx, uwsgi, and django via virtualenv\n"
+}
+
+do_commands()
+{
+    echo -e "Usage: ./txd [option]\n"
+    echo -e "main options:"
+    echo -e "start                  ~ starts nginx & uwsgi"
+    echo -e "stop                   ~ stops nginx & uwsgi"
+    echo -e "config-test            ~ tests nginx conf file"
+    echo -e "fresh                  ~ installs the conf files required by nginx & uwsgi\n"
+    echo -e "helpful options:"
+    echo -e "tumunu                 ~ installs virtualenv, pip, django, yolk & uwsgi for your app."
+    echo -e "nginx-start            ~ starts nginx only"
+    echo -e "nginx-stop             ~ stops nginx only"
+    echo -e "uwsgi-start            ~ starts uwsgi only"
+    echo -e "uwsgi-stop             ~ stops uwsgi only\n"
+    echo -e "debuging options:"
+    echo -e "nginx-log-tail         ~ tails the nginx error log"
+    echo -e "uwsgi-log-tail         ~ tails the uwsgi log"
+    echo -e "nginx-log-email        ~ emails the last 20 lines from the nginx error log"
+    echo -e "uwsgi-log-email        ~ emails the last 20 lines from the uwsgi log"
+    echo -e "help                   ~ this helpful list of commands"
+}
+
+# first run
+if [[ ! -f txd.conf ]]; then
+    do_splash
+    echo -e "*\n This is the first time you've used this script so we need some information to help you\n"
+    read -e -p " [1] Enter your TXD2 username: " -i "$USER" txduser
+    read -e -p " [2] Enter your sub-domain (leave blank for root-domain): " subdomain
+    read -e -p " [3] Enter the name of your Django app: " djangoapp
+    read -e -p " [4] Enter location of your Django app: "  -i "web/public" djangopath
+    read -e -p " [5] Enter the port number you wish to use: " txdport
+    echo -e "\nThanks, those values have been saved.\n"
+    
+    # write conf
+    echo -e "txduser=$txduser" >> txd.conf
+    echo -e "subdomain=$subdomain" >> txd.conf
+    echo -e "djangoapp=$djangoapp" >> txd.conf
+    echo -e "djangopath=$djangopath" >> txd.conf
+    echo -e "txdport=$txdport" >> txd.conf
+    
+    do_set
+else
+    do_splash
+    do_set
+fi
+
+# TXD nginx
+NGX_NAME=nginx
+NGX_DESC=nginx
+NGX_DAEMON=/opt/local/sbin/$NGX_NAME
+NGX_CONFIGS_DIR=$BASE_PATH/etc/$NGX_NAME/sites-enabled
+NGX_LOG=$BASE_PATH/logs/$NGX_NAME
+NGX_PID=$BASE_PATH/tmp/$NGX_NAME.pid
+SPOOL_DIR=$BASE_PATH/var/spool/$NGX_NAME
+
+# uwsgi
+OWNER=$TXD_USER
+CHMOD=664
+UWSGI_NAME=uwsgi
+UWSGI_DESC=uwsgi
+UWSGI_DAEMON=$BASE_PATH/.virtualenv/$DJANGO_APP/bin/$UWSGI_NAME
+UWSGI_CONFIGS_DIR=$BASE_PATH/etc/$UWSGI_NAME/sites-enabled
+UWSGI_LOG=$BASE_PATH/logs/$UWSGI_NAME
+UWSGI_PID=$BASE_PATH/tmp/$UWSGI_NAME.pid
+
+APP_DIR=$BASE_PATH/.virtualenv/$DJANGO_APP
+RUN_DIR=$BASE_PATH/var/run/$UWSGI_NAME
+
+if [ ! -f $NGX_DAEMON ]; then
+    echo -n "Couldn't find nginx at $NGX_DAEMON" && exit 0
+fi
+
+[[ -d $RUN_DIR ]] || mkdir -p $RUN_DIR && chown $OWNER $RUN_DIR
+[[ -d $NGX_LOG ]] || mkdir -p $NGX_LOG
+[[ -d $UWSGI_LOG ]] || mkdir -p $UWSGI_LOG
+[[ -d $SPOOL_DIR ]] || mkdir -p $SPOOL_DIR
+[[ -d $NGX_CONFIGS_DIR ]] || mkdir -p $NGX_CONFIGS_DIR
+[[ -d $UWSGI_CONFIGS_DIR ]] || mkdir -p $UWSGI_CONFIGS_DIR
+
+get_templates()
+{   
+    cd $BASE_PATH/local
+    wget -O uwsgi.skel  http://tumunu.com/scripts/uwsgi.skel
+    wget -O nginx.skel  http://tumunu.com/scripts/nginx.skel
+    wget -O uwsgi_params  http://tumunu.com/scripts/uwsgi_params
+}
+
+check_uwsgi()
+{
+    if [ ! -f $UWSGI_DAEMON ]; then
+         echo -ne "Counldn't find uwsgi at $UWSGI_DAEMON\n"
+         echo -e "To set up your environment please run: ./txd tumunu"
+         exit 0
+    fi
+}
+
+create_nginx_conf()
+{
+    if [ ! -f $NGX_CONFIGS_DIR/$NGX_NAME.conf ]; then
+        local TEMPLATE=$BASE_PATH/local/nginx.skel
+        echo -ne " Creating $NGX_CONFIGS_DIR/$NGX_NAME.conf\n" 
+        touch $NGX_CONFIGS_DIR/$NGX_NAME.conf
+        sed -e "s|%NGX_PID%|$NGX_PID|g"  \
+            -e "s|%SPOOL_DIR%|$SPOOL_DIR|g"  \
+            -e "s|%NGX_LOG%|$NGX_LOG|g"  \
+            -e "s|%NGX_NAME%|$NGX_NAME|g"  \
+            -e "s|%RUN_DIR%|$RUN_DIR|g"  \
+            -e "s|%APP%|$DJANGO_APP|g"  \
+            -e "s|%PORT%|$PORT|g"  \
+            -e "s|%PROJECT%|$PROJECT|g"  \
+         $TEMPLATE > $NGX_CONFIGS_DIR/$NGX_NAME.conf
+        
+        if [ ! -f $NGX_CONFIGS_DIR/uwsgi_params ]; then
+            cp uwsgi_params $NGX_CONFIGS_DIR/uwsgi_params
+        fi
+        
+        if [ ! -f $NGX_LOG/$NGX_NAME.access.log ]; then
+            touch $NGX_LOG/$NGX_NAME.access.log
+        fi
+        
+        if [ ! -f $NGX_LOG/$NGX_NAME.error.log ]; then
+            touch $NGX_LOG/$NGX_NAME.error.log
+        fi
+    else
+        echo -ne "Deleting $NGX_CONFIGS_DIR/$NGX_NAME.conf\n"
+        rm $NGX_CONFIGS_DIR/$NGX_NAME.conf
+    fi
+}
+
+create_uwsgi_conf()
+{
+    if [ ! -f $UWSGI_CONFIGS_DIR/$UWSGI_NAME.conf ]; then
+        local TEMPLATE=$BASE_PATH/local/uwsgi.skel
+        echo -ne " Creating $UWSGI_CONFIGS_DIR/$UWSGI_NAME.conf\n"
+        touch $UWSGI_CONFIGS_DIR/$UWSGI_NAME.conf
+        sed -e "s|%OWNER%|$OWNER|g" \
+            -e "s|%CHMOD%|$CHMOD|g" \
+            -e "s|%APP_DIR%|$APP_DIR|g" \
+            -e "s|%APP%|$DJANGO_APP|g"  \
+            -e "s|%PROJECT%|$PROJECT|g" \
+            -e "s|%UWSGI_LOG%|$UWSGI_LOG|g" \
+            -e "s|%UWSGI_PID%|$UWSGI_PID|g"  \
+            -e "s|%RUN_DIR%|$RUN_DIR|g"  \
+        $TEMPLATE > $UWSGI_CONFIGS_DIR/$UWSGI_NAME.conf
+    else
+        echo -ne " Deleting $UWSGI_CONFIGS_DIR/$UWSGI_NAME.conf\n"
+        rm $UWSGI_CONFIGS_DIR/$UWSGI_NAME.conf
+    fi
+}
+
+follow_errors()
+{
+    tail -f $1
+}
+
+do_shameless_plug()
+{        
+    echo -e "\n  *\n   Shameless plug\n                 *\n"
+    echo -e "  We're looking for work. Large, small, and inbetween. Mobile and web."
+    echo -e "  New Zealand rates, extensive global experience.\n"
+    echo -e "  email Opportunities@Tumunu.com if you have any leads.\n"
+    echo -e "  We appreciate your consideration. Cheers!\n"
+    echo -e "                   ......    "
+    echo -e "                   ;;;:;     "
+    echo -e "                   ;::;;;.   "
+    echo -e "                   ' ':;;;;. "
+    echo -e "                       ':;;;;"
+    echo -e "                         ':;\n"
+    echo -e "  (this is the only time you'll see this message)\n\n"
+
+}
+
+do_fresh() 
+{
+    local NGINX_TEMPLATE=$BASE_PATH/local/nginx.skel
+    local UWSGI_TEMPLATE=$BASE_PATH/local/uwsgi.skel
+    
+    if [[ -f $NGINX_TEMPLATE && -f $UWSGI_TEMPLATE ]]; then
+        create_nginx_conf
+        create_uwsgi_conf
+        echo -e "\nFrom what I can tell, the following conf files were created successfully."
+    else
+        get_templates
+        echo -e "\nOne of the templates required by this script wasn't found so I've downloaded it."
+        echo -e "To create the conf files rerun: ./txd.sh fresh\n"
+    fi
+}
+
+test_nginx_config() 
+{
+	if $NGX_DAEMON -t -c $NGX_CONFIGS_DIR/$NGX_NAME.conf > /dev/null 2>&1; then
+		return 0
+	else
+		$NGX_DAEMON -t -c $NGX_CONFIGS_DIR/$NGX_NAME.conf
+		return $?
+	fi
+}
+
+do_pid_check()
+{
+    local PIDFILE=$1
+    [[ -f $PIDFILE ]] || return 0
+    local PID=$(cat $PIDFILE)
+    for p in $(pgrep $2); do
+        [[ $p == $PID ]] && return 1
+    done
+    return 0
+}
+
+start_serving()
+{
+    if [ $1 == "uwsgi" ]; then
+        local PID=$UWSGI_PID
+    else
+        local PID=$NGX_PID
+    fi
+    
+    if do_pid_check $PID $1; then
+        if [ $1 == "uwsgi" ]; then
+            $UWSGI_DAEMON --ini $UWSGI_CONFIGS_DIR/$UWSGI_NAME.conf
+        else
+            $NGX_DAEMON -c $NGX_CONFIGS_DIR/$NGX_NAME.conf
+        fi
+        echo -e "$1 has been started.\n"
+    else
+        echo -e "$1 is already running!\n"
+    fi
+}
+
+stop_serving()
+{
+    if [ $1 == "uwsgi" ]; then
+        local PID=$UWSGI_PID
+    else
+        local PID=$NGX_PID
+    fi
+    
+    if do_pid_check $PID $1; then 
+        if [ $1 == "uwsgi" ]; then
+            $UWSGI_DAEMON --stop $UWSGI_PID
+        else
+            kill -QUIT $( cat $NGX_PID )
+        fi
+        echo -e "$1 has been stopped.\n"
+        rm -f $PID
+    else
+        echo -e "$1 had already stopped ages ago.\n"
+    fi
+}
+
+do_start()
+{
+    start_serving "nginx"
+    start_serving "uwsgi"
+}
+
+# NOTE
+# If all turns to custard use the following to crush uwsgi
+# ps -ef | grep uwsgi | awk '{print $2}'| xargs kill -9
+do_stop()
+{    
+    stop_serving "uwsgi"
+    stop_serving "nginx"
+}
+
+do_pips()
+{
+    pip install yolk; pip install django; pip install argparse; pip install uwsgi
+}
+
+do_tumunu()
+{
+    if [ ! -d $BASE_PATH/local ]; then
+        mkdir -p $BASE_PATH/local
+    fi
+        
+    if [ ! -d $BASE_PATH/.virtualenv ]; then
+        mkdir -p $BASE_PATH/.virtualenv
+    fi
+    
+    cd $BASE_PATH/local
+    wget -O $VIRTUALENV.tar.gz  http://pypi.python.org/packages/source/v/virtualenv/$VIRTUALENV.tar.gz
+    tar xvzf $VIRTUALENV.tar.gz 
+    cd $VIRTUALENV
+    python virtualenv.py --no-site-packages $BASE_PATH/.virtualenv/$DJANGO_APP
+    . $BASE_PATH/.virtualenv/$DJANGO_APP/bin/activate
+    do_pips
+    get_templates
+    do_fresh
+    do_breaker
+    echo -e "\n*\n Installation has completed\n"
+    echo -e "Enjoy your new TXD2 account with all the bells & whistles."
+    echo -e "You now have virtualenv, pip, django, yolk, uwsgi, and more.\n"
+    echo -e "Activate virtualenv with the following command:\n"
+    echo -ne "  source $BASE_PATH/.virtualenv/$DJANGO_APP/bin/activate\n"
+    do_breaker
+    do_shameless_plug
+}
+
+do_email()
+{
+    read -e -p " [1] Enter the destination email address: " email
+    read -e -p " [2] Enter the subject message (leave blank for default message): " subject
+    read -e -p " [2] Enter the number of lines to send (default: 20): " lines
+    
+    if [ $1 == "nginx" ]; then
+        local WHAT="nginx error"
+        local TOPIC="TXD2 $WHAT log"
+        local LOG=$NGX_LOG/nginx.error.log
+        
+    elif [ $1 == "uwsgi" ]; then
+        local WHAT=$1
+        local TOPIC="TXD2 $WHAT log"
+        local LOG=$UWSGI_LOG/$DJANGO_APP.log
+    fi
+    if [ ! -z $subject ]; then
+        TOPIC=$subject
+    fi
+    
+    if [ ! $lines ]; then
+        lines=20
+    fi
+    
+    if [ -s $LOG ]; then
+        tail -n $lines $LOG > $BASE_PATH/logs/temp.letter
+        # pointless but pfft
+        if [ -f $BASE_PATH/logs/temp.letter ]; then
+            mailx -s "$TOPIC" $email <$BASE_PATH/logs/temp.letter
+            echo -e "\nThanks, the last $lines lines of the $WHAT log has been sent to $email.\n"
+        fi
+    else
+        echo -e "\nSorry. Your $WHAT log seems to be empty. No email was sent to $email.\n"
+    fi
+}
+
+case "$1" in
+	start)
+		echo -ne "\nStarting all of your $DESC daemons:\n"
+		check_uwsgi
+		test_nginx_config
+		do_start
+		;;
+
+	stop)
+		echo -ne "\nStopping all of your $DESC daemons:\n"
+		check_uwsgi
+		do_stop
+		;;
+		
+	fresh)
+	    echo -ne "\nCreating fresh conf files for your $DESC:\n"
+	    do_fresh
+	    ;;
+
+	config-test)
+		echo -ne "\nTesting your $DESC nginx configuration:\n"
+		if test_nginx_config; then
+		    echo "Completed."
+		else
+			exit $?
+		fi
+		;;
+		
+	tumunu)
+	    echo -ne "\nInstalling the tumunu special for your $DESC:\n"
+	    do_tumunu
+	    ;;
+	    
+	nginx-start)
+	    echo -ne "\nStarting nginx for your $DESC:"
+	    start_serving "nginx"
+	    ;;
+	    
+	nginx-stop)
+	    echo -ne "\nStopping nginx for your $DESC:"
+        stop_serving "nginx"
+	    ;;
+
+	uwsgi-start)
+	    echo -ne "\nStarting uwsgi for your $DESC:"
+	    check_uwsgi
+        start_serving "uwsgi"
+	    ;;
+	    
+	uwsgi-stop)
+	    echo -ne "\nStopping uwsgi on for your $DESC:"
+	    check_uwsgi
+	    stop_serving "uwsgi"
+	    ;;
+	    
+	nginx-log-tail)
+	    echo -ne "\nTailing nginx error log:\n"
+	    follow_errors "$NGX_LOG/nginx.error.log"
+	    ;;
+	    
+	uwsgi-log-tail)
+	    echo -ne "\nTailing uwsgi log:\n"
+	    follow_errors "$UWSGI_LOG/$DJANGO_APP.log"
+	    ;;
+	    
+	nginx-log-email)
+	    echo -ne "\nEmail nginx error log:\n"
+	    do_email "nginx"
+	    ;;
+	    
+	uwsgi-log-email)
+	    echo -ne "\nEmail uwsgi log:\n"
+	    do_email "uwsgi"
+	    ;;
+	    
+	help)
+	    do_commands
+	    ;;
+	     
+	*)
+        do_commands
+		echo -e "\n" >&2
+		exit 1
+		;;
+esac
+
+exit 0

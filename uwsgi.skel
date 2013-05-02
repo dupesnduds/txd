@@ -1,0 +1,19 @@
+[uwsgi]
+uid = %OWNER%
+gid = %OWNER%
+chmod-socket = %CHMOD%
+
+harakiri=20
+limit-as=128
+max-requests=5000
+vacuum = true
+master=true
+processes=1
+
+env DJANGO_SETTINGS_MODULE = %APP%.settings
+chdir = %PROJECT%
+module=wsgi:application
+daemonize = %UWSGI_LOG%/%APP%.log
+pidfile=%UWSGI_PID%
+socket = %RUN_DIR%/%APP%.sock
+virtualenv = %APP_DIR%
