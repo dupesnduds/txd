@@ -46,29 +46,25 @@ do_splash()
     echo -e "  o   o  o o o o o  o o  o o  o"
     echo -e "  o   o--o o o o o--o o  o o--o\n"
     echo -e "         (www.tumunu.com)\n"
-    echo -e " TXD2 nginx, uwsgi, and django via virtualenv\n"
 }
 
 do_commands()
 {
-    echo -e "Usage: ./txd [option]\n"
+    echo -e "\nUsage: ./txd [option]\n"
     echo -e "main options:"
-    echo -e "start                  ~ starts nginx & uwsgi"
-    echo -e "stop                   ~ stops nginx & uwsgi"
-    echo -e "config-test            ~ tests nginx conf file"
-    echo -e "fresh                  ~ installs the conf files required by nginx & uwsgi\n"
+    echo -e "  start                   ~ starts nginx & uwsgi"
+    echo -e "  stop                    ~ stops nginx & uwsgi"
+    echo -e "  start [nginx|uwsgi]     ~ starts either nginx or uwsgi only"
+    echo -e "  stop [nginx|uwsgi]      ~ stops either nginx or uwsgi only"
+    echo -e "  django-path [path]      ~ add a path to your django app (PYTHONPATH alternative)\n"
     echo -e "helpful options:"
-    echo -e "tumunu                 ~ installs virtualenv, pip, django, yolk & uwsgi for your app."
-    echo -e "nginx-start            ~ starts nginx only"
-    echo -e "nginx-stop             ~ stops nginx only"
-    echo -e "uwsgi-start            ~ starts uwsgi only"
-    echo -e "uwsgi-stop             ~ stops uwsgi only\n"
+    echo -e "  tumunu                  ~ installs virtualenv, pip, django, yolk & uwsgi for your site."
+    echo -e "  config-test             ~ tests nginx conf file"
+    echo -e "  fresh                   ~ installs the conf files required by nginx & uwsgi\n"
     echo -e "debuging options:"
-    echo -e "nginx-log-tail         ~ tails the nginx error log"
-    echo -e "uwsgi-log-tail         ~ tails the uwsgi log"
-    echo -e "nginx-log-email        ~ emails the last 20 lines from the nginx error log"
-    echo -e "uwsgi-log-email        ~ emails the last 20 lines from the uwsgi log"
-    echo -e "help                   ~ this helpful list of commands"
+    echo -e "  log-tail [nginx|uwsgi]  ~ tails either the nginx or uwsgi error log"
+    echo -e "  log-email [nginx|uwsgi] ~ emails either the nginx or uwsgi error log"
+    echo -e "\nTXD2 nginx, uwsgi, and django via virtualenv by tumunu.com\n"
 }
 
 # first run
@@ -91,7 +87,6 @@ if [[ ! -f txd.conf ]]; then
     
     do_set
 else
-    do_splash
     do_set
 fi
 
@@ -197,6 +192,17 @@ create_uwsgi_conf()
         echo -ne " Deleting $UWSGI_CONFIGS_DIR/$UWSGI_NAME.conf\n"
         rm $UWSGI_CONFIGS_DIR/$UWSGI_NAME.conf
     fi
+}
+
+do_path()
+{
+    echo -e "$1 has been added to your python path\n"   
+    local ARA=$APP_DIR/lib/python2.7/site-packages/
+    if [ ! -f $ARA/__txd__.pth ];then
+        touch $ARA/__txd__.pth;
+    fi
+    
+    echo $1 >>$ARA/__txd__.pth
 }
 
 follow_errors()
@@ -386,25 +392,47 @@ do_email()
 
 case "$1" in
 	start)
-		echo -ne "\nStarting all of your $DESC daemons:\n"
-		check_uwsgi
-		test_nginx_config
-		do_start
+		if [ -z "$2" ];then 
+		    echo -ne "\nStarting all of your $DESC daemons: \n"
+		    test_nginx_config
+		    do_start
+		else
+		    if [ "$2"=="nginx" ];then
+		        echo -ne "\nStarting nginx for your $DESC: "
+		        test_nginx_config
+		        start_serving "$2"
+		    elif [ "$2"=="uwsgi" ];then
+		        echo -ne "\nStarting uwsgi for your $DESC: "
+		        check_uwsgi
+                start_serving "$2"
+		    fi
+		fi
 		;;
 
 	stop)
-		echo -ne "\nStopping all of your $DESC daemons:\n"
-		check_uwsgi
-		do_stop
+		if [ -z "$2" ]; then
+		    echo -ne "\nStopping all of your $DESC daemons: \n"
+		    check_uwsgi
+		    do_stop
+		else
+		    if [ "$2"=="nginx" ];then
+		        echo -ne "\nStopping nginx for your $DESC: "
+                stop_serving "$2"
+		    elif [ "$2"=="uwsgi" ];then
+		        echo -ne "\nStopping uwsgi on for your $DESC: "
+	            check_uwsgi
+	            stop_serving "$2"
+		    fi
+		fi
 		;;
 		
 	fresh)
-	    echo -ne "\nCreating fresh conf files for your $DESC:\n"
+	    echo -ne "\nCreating fresh conf files for your $DESC: \n"
 	    do_fresh
 	    ;;
 
 	config-test)
-		echo -ne "\nTesting your $DESC nginx configuration:\n"
+		echo -ne "\nTesting your $DESC nginx configuration: \n"
 		if test_nginx_config; then
 		    echo "Completed."
 		else
@@ -413,52 +441,48 @@ case "$1" in
 		;;
 		
 	tumunu)
-	    echo -ne "\nInstalling the tumunu special for your $DESC:\n"
+	    echo -ne "\nInstalling the tumunu special for your $DESC: \n"
 	    do_tumunu
 	    ;;
 	    
-	nginx-start)
-	    echo -ne "\nStarting nginx for your $DESC:"
-	    start_serving "nginx"
+	django-path)
+	    echo -ne "\nAdding a new path for your $DESC: "
+	    do_path $2
 	    ;;
 	    
-	nginx-stop)
-	    echo -ne "\nStopping nginx for your $DESC:"
-        stop_serving "nginx"
-	    ;;
-
-	uwsgi-start)
-	    echo -ne "\nStarting uwsgi for your $DESC:"
-	    check_uwsgi
-        start_serving "uwsgi"
-	    ;;
-	    
-	uwsgi-stop)
-	    echo -ne "\nStopping uwsgi on for your $DESC:"
-	    check_uwsgi
-	    stop_serving "uwsgi"
-	    ;;
-	    
-	nginx-log-tail)
-	    echo -ne "\nTailing nginx error log:\n"
-	    follow_errors "$NGX_LOG/nginx.error.log"
+	log-tail)
+	    if [ -z "$2" ];then
+	        echo -e "\nlog-tail requires an option\n"
+	        exit 0
+	    else
+            if [ "$2"=="nginx" ];then
+                echo -ne "\nTailing nginx error log: \n"
+                follow_errors "$NGX_LOG/nginx.error.log"
+            elif [ "$2"=="uwsgi" ];then
+                echo -e "\nTailing uwsgi log: \n"
+	            follow_errors "$UWSGI_LOG/$DJANGO_APP.log"
+	        else
+	            echo -e "\nThat's not a valid option for log-tail\n"
+            fi
+	    fi	    
 	    ;;
 	    
-	uwsgi-log-tail)
-	    echo -ne "\nTailing uwsgi log:\n"
-	    follow_errors "$UWSGI_LOG/$DJANGO_APP.log"
-	    ;;
-	    
-	nginx-log-email)
-	    echo -ne "\nEmail nginx error log:\n"
-	    do_email "nginx"
-	    ;;
-	    
-	uwsgi-log-email)
-	    echo -ne "\nEmail uwsgi log:\n"
-	    do_email "uwsgi"
-	    ;;
-	    
+	log-email)
+	    if [ -z "$2" ];then
+	        echo -e "\nlog-email requires an option\n"
+	        exit 0
+	    else
+            if [ "$2"=="nginx" ];then
+                echo -ne "\nEmailing nginx error log: \n"
+                do_email "$2"
+            elif [ "$2"=="uwsgi" ];then
+                echo -ne "\nEmailing uwsgi log: \n"
+                do_email "$2"
+            else
+                echo -e "\nThat's not a valid option for log-email\n"
+            fi
+	    fi	    
+	    ;;    
 	help)
 	    do_commands
 	    ;;
